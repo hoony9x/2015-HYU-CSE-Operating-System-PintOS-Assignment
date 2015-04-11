@@ -298,11 +298,37 @@ thread_create (const char *name, int priority, thread_func *function, void *aux)
   /* Push child into child list. */
   list_push_back(&t->parent_thread->child_list, &t->child_elem);
 
-
   /* Add to run queue. */
   thread_unblock (t);
 
+  /* Compare priority and if new process's priority is higher then current process, yield. */
+  if(thread_current()->priority < t->priority)
+    thread_yield();
+
   return tid;
+}
+
+void test_max_priority(void)
+{
+  /* Check if ready_list is empty. */
+  if(list_empty(&ready_list))
+    return;
+
+  /* yield current process */
+  if(thread_current() != idle_thread)
+    thread_yield();
+}
+
+/* This function will be used for sorting. */
+bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  const struct thread *first = list_entry(a, struct thread, elem);
+  const struct thread *second = list_entry(b, struct thread, elem);
+
+  if(first->priority > second->priority)
+    return true;
+  else
+    return false;
 }
 
 /* Puts the current thread to sleep.  It will not be scheduled
@@ -338,7 +364,10 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+
+  /* Make ready list in ordered state. */
+  list_insert_ordered(&ready_list, &t->elem, cmp_priority, NULL);
+
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -415,8 +444,11 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+
+  /* Make push in ordered state. */
+  if (cur != idle_thread)
+    list_insert_ordered(&ready_list, &cur->elem, cmp_priority, NULL);
+
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -444,6 +476,8 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+
+  test_max_priority(); //Check if this process's priority is the highest.
 }
 
 /* Returns the current thread's priority. */
