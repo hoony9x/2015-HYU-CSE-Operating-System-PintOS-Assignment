@@ -14,12 +14,14 @@
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h" /* malloc 함수 관련 warning 제거를 위해 삽입 */
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+void argument_stack(const char **parse, const int arg_count, void **esp); /* 유저 스택에 프로그램 이름과 인자들을 저장하는 함수 */
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -38,8 +40,17 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  /* strtok_r 함수의 3번째 인자로 사용되는 변수 */
+  char *strtok_save_ptr;
+
+  /* file_name 변수에서 첫 번째 인자를 추출. */
+  char *thread_name = strtok_r(file_name, " ", &strtok_save_ptr);
+  if(!thread_name) /* file_name에서 인자를 추출하지 못했을 경우 종료. */
+    return TID_ERROR;
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  /* 위에 file_name에서 추출한 thread_name을 thread_create함수에 넣어주게 됨 */
+  tid = thread_create (thread_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -50,21 +61,55 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char *file_name = file_name_;
+  char *file_name = (char*)file_name_; /* Type Casting을 지정해줌 */
   struct intr_frame if_;
   bool success;
+
+  /*
+    입력받은 인자들을 분리하여 임시로 저장하기 위한 변수.
+    이 변수는 이후에 argument_stack 함수에 들어가서 스택에 인자를 저장하는 데 이용됨.
+   */
+  char **parse = (char**)malloc(sizeof(char*)); //parsed된 argument들이 저장될 곳.
+  int arg_count = 0; //parsed된 argument의 수
+  char *temp_parsed; //parsed되는 argument 하나를 임시로 저장하기 위한 변수
+  char *strtok_save_ptr; //strtok_r 함수의 3번째 인자로 사용되는 변수
+
+  /*
+    stack에 넣기 전에 parse배열에 인자를 각각 분리하여 삽입하는 과정.
+  */
+  for(temp_parsed = strtok_r(file_name, " ", &strtok_save_ptr); temp_parsed; temp_parsed = strtok_r(NULL, " ", &strtok_save_ptr))
+  {
+    parse = (char**)realloc(parse, sizeof(char*)*(arg_count + 1));
+    parse[arg_count] = (char*)malloc(sizeof(char)*strlen(temp_parsed));
+    strlcpy(parse[arg_count], temp_parsed, sizeof(char)*(strlen(temp_parsed) + 1)); //Shallow Copy를 방지하기 위해 문자열을 대상 주소로 직접 복사함
+    arg_count++;
+  }
+
+  /* load함수로 전달할 parsing된 문자열의 첫 번째 Token */
+  char *load_file_name = parse[0];
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  success = load (load_file_name, &if_.eip, &if_.esp); /* parsing된 문자열의 첫 번째 Token만 들어가도록 코드 수정 */
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
     thread_exit ();
+
+  /* Stack에 인자를 저장 */
+  argument_stack(parse , arg_count , &if_.esp);
+
+  /* Parsing을 위해 동적 할당했던 메모리의 할당을 해제함. */
+  while(arg_count >= 0)
+    free(parse[arg_count--]);
+  free(parse);
+
+  /* 메모리 내용을 확인하기 위한 pintos 디버깅 코드(수업 자료 코드 이용) */
+  hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -74,6 +119,56 @@ start_process (void *file_name_)
      and jump to it. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
+}
+
+/*
+  입력받은 인자 값을 Stack에 넣어주기 위한 함수 구현
+  함수명과 함수 인수명은 수업자료에 있는 것을 참고
+*/
+void
+argument_stack(const char **parse, const int arg_count, void **esp)
+{
+  int i, j;
+  unsigned int argv_addr_store[arg_count];
+
+  for(i = arg_count - 1; i >= 0; i--)
+  {
+    /* Stack에 argv 인자값을 char단위로 하나씩 삽입 */
+    for(j = strlen(parse[i]); j >= 0; j--)
+    {
+      *esp -= 1;
+      **(char**)esp = parse[i][j];
+    }
+
+    /* 삽입한 문자열의 위치를 임시로 저장함. 이후에 주소값을 Stack에 넣게 됨. */
+    argv_addr_store[i] = (unsigned int)(*esp);
+  }
+
+  /* Word Size로 Align */
+  *esp = (unsigned int)*esp & 0xfffffffc;
+
+  /* argc의 수보다 하나 더 큰 argv의 위치를 만들고 해당 위치에 NULL값을 기록함 */
+  *esp -= 4;
+  memset(*esp, 0, sizeof(unsigned int));
+
+  /* 각 문자열이 위치한 주소값을 Stack에 삽입하는 과정 */
+  for(i = arg_count - 1; i >= 0; i--)
+  {
+    *esp -= 4;
+    *(unsigned int*)(*esp) = argv_addr_store[i];
+  }
+
+  /* **argv의 주소값을 Stack에 삽입. (*argv[0] 의 주소값과 같으므로 아래와 같이 코딩함) */
+  *esp -= 4;
+  *(unsigned int*)(*esp) = (unsigned int)(*esp) + 4;
+
+  /* argc의 값을 Stack에 삽입 */
+  *esp -= 4;
+  *(unsigned int*)(*esp) = (unsigned int)arg_count;
+
+  /* Fake Address 값 삽입 */
+  *esp -= 4;
+  memset(*esp, 0, sizeof(unsigned int));
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -131,7 +226,7 @@ process_activate (void)
      interrupts. */
   tss_update ();
 }
-
+
 /* We load ELF binaries.  The following definitions are taken
    from the ELF specification, [ELF1], more-or-less verbatim.  */
 
