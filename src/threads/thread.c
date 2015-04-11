@@ -8,6 +8,7 @@
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h" /* Added to use malloc function */
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
@@ -163,8 +164,7 @@ thread_print_stats (void)
    PRIORITY, but no actual priority scheduling is implemented.
    Priority scheduling is the goal of Problem 1-3. */
 tid_t
-thread_create (const char *name, int priority,
-               thread_func *function, void *aux) 
+thread_create (const char *name, int priority, thread_func *function, void *aux) 
 {
   struct thread *t;
   struct kernel_thread_frame *kf;
@@ -205,6 +205,27 @@ thread_create (const char *name, int priority,
   sf->ebp = 0;
 
   intr_set_level (old_level);
+
+
+  /* Implement file descriptor table */
+  t->file_desc_table = palloc_get_page(0);
+  t->file_desc_count = 2;
+
+  /* Implement process hierarchy */
+  t->parent_thread = thread_current();
+  t->is_load = 0;
+  t->is_exit = 0;
+
+  /* Initialize child list */
+  list_init(&t->child_list);
+
+  /* Initialize each semaphore */
+  sema_init(&t->load_sema, 0);
+  sema_init(&t->exit_sema, 0);
+
+  /* Push child into child list. */
+  list_push_back(&t->parent_thread->child_list, &t->child_elem);
+
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -299,6 +320,13 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
+
+  /* If thread name is main(thus, if this thread is init thread), do not sema up this. */
+  if(strcmp(thread_current()->name, "main")) //If thread is not "main" process, sema up.
+  {
+    sema_up(&thread_current()->exit_sema);
+  }
+
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
@@ -470,6 +498,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+
+  /* Initialize child list */
+  list_init(&t->child_list);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -541,7 +572,7 @@ thread_schedule_tail (struct thread *prev)
   if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) 
     {
       ASSERT (prev != cur);
-      palloc_free_page (prev);
+      //palloc_free_page (prev); /* Instructor wants to delete this line. */
     }
 }
 

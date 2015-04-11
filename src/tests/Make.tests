@@ -49,7 +49,7 @@ $(foreach test,$(TESTS),$(eval $(test).output: $($(test)_PUTFILES)))
 $(foreach test,$(TESTS),$(eval $(test).output: TEST = $(test)))
 
 # Prevent an environment variable VERBOSE from surprising us.
-VERBOSE =
+VERBOSE = 1
 
 TESTCMD = pintos -v -k -T $(TIMEOUT)
 TESTCMD += $(SIMULATOR)
@@ -61,7 +61,7 @@ endif
 ifeq ($(filter vm, $(KERNEL_SUBDIRS)), vm)
 TESTCMD += --swap-size=4
 endif
-TESTCMD += -- -q
+TESTCMD += -- -q  
 TESTCMD += $(KERNELFLAGS)
 ifeq ($(filter userprog, $(KERNEL_SUBDIRS)), userprog)
 TESTCMD += -f

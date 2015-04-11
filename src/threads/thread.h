@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <threads/synch.h> /* Added to use semaphore */
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -96,6 +97,28 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+
+    /* Codes for file descriptor */
+    struct file **file_desc_table;
+    int file_desc_count;
+
+    /* Descriptor of parent process */
+    struct thread *parent_thread;
+
+    /* child list components */
+    struct list child_list;
+    struct list_elem child_elem;
+
+    /* Check load/exit state */
+    int is_load;
+    int is_exit;
+
+    /* semaphore for load/exit */
+    struct semaphore load_sema;
+    struct semaphore exit_sema;
+
+    /* return value from exit */
+    int exit_status;
 #endif
 
     /* Owned by thread.c. */

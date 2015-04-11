@@ -10,6 +10,7 @@ static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
+void sys_exit(int status); /* exit system call. From syscall.c */
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -126,6 +127,8 @@ page_fault (struct intr_frame *f)
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
+
+  sys_exit(-1); //If page_fault, call this. Below code would not be executed.
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
