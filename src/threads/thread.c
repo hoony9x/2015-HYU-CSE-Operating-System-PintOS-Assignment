@@ -25,6 +25,12 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* Added to use sleep list. This is the list of process in sleep state. */
+static struct list sleep_list;
+
+/* Added to check awake time */
+int64_t next_tick_to_awake = INT64_MAX;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -72,6 +78,71 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+void
+thread_sleep(int64_t ticks) //Will be used to sleep process.
+{
+  struct thread *cur = thread_current(); //Get current process
+  if(cur != idle_thread) //If not idle
+  {
+    enum intr_level old_level;
+    old_level = intr_disable (); //Diable interrupt
+
+    cur->my_awake_tick = ticks; //Set my awake tick
+    list_push_back(&sleep_list, &cur->elem); //Push into sleep list
+    update_next_tick_to_awake(); //Update next awake tick
+
+    thread_block(); //Block current process
+    intr_set_level (old_level); //Enable interrupt
+  }
+}
+
+void
+thread_awake(int64_t ticks)
+{
+  struct list_elem *e; /* Will temporary store each object in child list. */
+
+  /* Search all elements in sleep list */
+  for(e = list_begin(&sleep_list); e != list_end(&sleep_list);)
+  {
+    struct thread *t = list_entry(e, struct thread, elem); //Get each object in list.
+    e = list_next(e);
+
+    if(t->my_awake_tick <= ticks) //If it is time to awake
+    {
+      list_remove(&t->elem); //Remove from sleep list.
+      thread_unblock(t); //unblock
+    }
+    else //If it is not time to awake
+    {
+      update_next_tick_to_awake(); //Just update next tick
+    }
+  }
+}
+
+void
+update_next_tick_to_awake()
+{
+  int64_t min_tick = INT64_MAX; //For check which tick is minimum.
+  struct list_elem *e; /* Will temporary store each object in child list. */
+
+  /* Search all elements in sleep list */
+  for(e = list_begin(&sleep_list); e != list_end(&sleep_list); e = list_next(e))
+  {
+    struct thread *t = list_entry(e, struct thread, elem); //Get each object in list.
+    if(t->my_awake_tick < min_tick) //make min_tick variable smallist.
+      min_tick = t->my_awake_tick;
+  }
+
+  next_tick_to_awake = min_tick; //Update next_tick_to_awake variable with minimum tick.
+}
+
+int64_t
+get_next_tick_to_awake(void) //Just return current next awake tick value;
+{
+  return next_tick_to_awake;
+}
+
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -92,6 +163,7 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
+  list_init (&sleep_list); /* Added to use sleep waiting */
   list_init (&all_list);
 
   /* Set up a thread structure for the running thread. */

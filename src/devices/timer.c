@@ -90,10 +90,14 @@ void
 timer_sleep (int64_t ticks) 
 {
   int64_t start = timer_ticks ();
+  thread_sleep(start + ticks); //Call thread_sleep function with current process's awake tick
 
+  /* Below codes are replaced with alarm call */
+  /*
   ASSERT (intr_get_level () == INTR_ON);
   while (timer_elapsed (start) < ticks) 
     thread_yield ();
+  */
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +176,12 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+
+  /* If it is time to awake, call thread_awake() function. */
+  if(ticks >= get_next_tick_to_awake())
+  {
+    thread_awake(ticks);
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
