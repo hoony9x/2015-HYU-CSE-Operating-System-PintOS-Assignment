@@ -25,6 +25,12 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* Added to use sleep list. This is the list of process in sleep state. */
+static struct list sleep_list;
+
+/* Added to check awake time */
+int64_t next_tick_to_awake = INT64_MAX;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -72,6 +78,71 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+void
+thread_sleep(int64_t ticks) //Will be used to sleep process.
+{
+  struct thread *cur = thread_current(); //Get current process
+  if(cur != idle_thread) //If not idle
+  {
+    enum intr_level old_level;
+    old_level = intr_disable (); //Diable interrupt
+
+    cur->my_awake_tick = ticks; //Set my awake tick
+    list_push_back(&sleep_list, &cur->elem); //Push into sleep list
+    update_next_tick_to_awake(); //Update next awake tick
+
+    thread_block(); //Block current process
+    intr_set_level (old_level); //Enable interrupt
+  }
+}
+
+void
+thread_awake(int64_t ticks)
+{
+  struct list_elem *e; /* Will temporary store each object in child list. */
+
+  /* Search all elements in sleep list */
+  for(e = list_begin(&sleep_list); e != list_end(&sleep_list);)
+  {
+    struct thread *t = list_entry(e, struct thread, elem); //Get each object in list.
+    e = list_next(e);
+
+    if(t->my_awake_tick <= ticks) //If it is time to awake
+    {
+      list_remove(&t->elem); //Remove from sleep list.
+      thread_unblock(t); //unblock
+    }
+    else //If it is not time to awake
+    {
+      update_next_tick_to_awake(); //Just update next tick
+    }
+  }
+}
+
+void
+update_next_tick_to_awake()
+{
+  int64_t min_tick = INT64_MAX; //For check which tick is minimum.
+  struct list_elem *e; /* Will temporary store each object in child list. */
+
+  /* Search all elements in sleep list */
+  for(e = list_begin(&sleep_list); e != list_end(&sleep_list); e = list_next(e))
+  {
+    struct thread *t = list_entry(e, struct thread, elem); //Get each object in list.
+    if(t->my_awake_tick < min_tick) //make min_tick variable smallist.
+      min_tick = t->my_awake_tick;
+  }
+
+  next_tick_to_awake = min_tick; //Update next_tick_to_awake variable with minimum tick.
+}
+
+int64_t
+get_next_tick_to_awake(void) //Just return current next awake tick value;
+{
+  return next_tick_to_awake;
+}
+
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -92,6 +163,7 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
+  list_init (&sleep_list); /* Added to use sleep waiting */
   list_init (&all_list);
 
   /* Set up a thread structure for the running thread. */
@@ -226,11 +298,37 @@ thread_create (const char *name, int priority, thread_func *function, void *aux)
   /* Push child into child list. */
   list_push_back(&t->parent_thread->child_list, &t->child_elem);
 
-
   /* Add to run queue. */
   thread_unblock (t);
 
+  /* Compare priority and if new process's priority is higher then current process, yield. */
+  if(thread_current()->priority < t->priority)
+    thread_yield();
+
   return tid;
+}
+
+void test_max_priority(void)
+{
+  /* Check if ready_list is empty. */
+  if(list_empty(&ready_list))
+    return;
+
+  /* yield current process */
+  if(thread_current() != idle_thread)
+    thread_yield();
+}
+
+/* This function will be used for sorting. */
+bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  const struct thread *first = list_entry(a, struct thread, elem);
+  const struct thread *second = list_entry(b, struct thread, elem);
+
+  if(first->priority > second->priority)
+    return true;
+  else
+    return false;
 }
 
 /* Puts the current thread to sleep.  It will not be scheduled
@@ -266,7 +364,10 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+
+  /* Make ready list in ordered state. */
+  list_insert_ordered(&ready_list, &t->elem, cmp_priority, NULL);
+
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -343,8 +444,11 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+
+  /* Make push in ordered state. */
+  if (cur != idle_thread)
+    list_insert_ordered(&ready_list, &cur->elem, cmp_priority, NULL);
+
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -372,6 +476,8 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+
+  test_max_priority(); //Check if this process's priority is the highest.
 }
 
 /* Returns the current thread's priority. */

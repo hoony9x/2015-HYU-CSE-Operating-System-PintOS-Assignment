@@ -97,6 +97,7 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+#endif
 
     /* Codes for file descriptor */
     struct file **file_desc_table;
@@ -119,7 +120,9 @@ struct thread
 
     /* return value from exit */
     int exit_status;
-#endif
+
+    /* Variable for storing wakeup time */
+    int64_t my_awake_tick;
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
@@ -160,5 +163,15 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+/* Below functions are added to use alarm call */
+void thread_sleep(int64_t ticks);
+void thread_awake(int64_t ticks);
+void update_next_tick_to_awake(void);
+int64_t get_next_tick_to_awake(void);
+
+/* Below functions are added to use priority scheduling */
+void test_max_priority(void);
+bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 #endif /* threads/thread.h */
