@@ -142,6 +142,71 @@ get_next_tick_to_awake(void) //Just return current next awake tick value;
   return next_tick_to_awake;
 }
 
+void
+donate_priority(void) //Donate priority
+{
+  struct thread *cur_thread = thread_current(); //Get current process info
+  struct lock *cur_lock = cur_thread->wait_on_lock; //Get lock info
+  int depth = 0;
+
+  //Search for nested donation
+  while(cur_lock != NULL && cur_lock->holder != NULL && depth < 8)
+  {
+    if(cur_lock->holder->priority > cur_thread->priority)
+      break;
+
+    cur_lock->holder->priority = cur_thread->priority; //donate priority
+    cur_thread = cur_lock->holder; //move to next process
+    cur_lock = cur_thread->wait_on_lock; //get new lock
+
+    depth++;
+  }
+}
+
+void
+remove_with_lock(struct lock *lock) //when release lock, check donation list and do a proper job.
+{
+  struct list_elem *e; /* Will temporary store each object in child list. */
+  struct list *target_donation_list = &thread_current()->donations;
+
+  if(list_empty(target_donation_list)) //If list is empty, quit
+    return;
+
+  /* Search all elements in donation list */
+  for(e = list_begin(target_donation_list); e != list_end(target_donation_list);)
+  {
+    struct thread *t = list_entry(e, struct thread, donation_elem); //Get each object in list.
+    e = list_next(e);
+    
+    if(t->wait_on_lock == lock)
+      list_remove(&t->donation_elem); //remove entry that has same lock
+  }
+}
+
+void
+refresh_priority(void)
+{
+  struct thread *cur = thread_current(); //Get current process
+  cur->priority = cur->init_priority; //Restore initial priority
+
+  if(list_empty(&cur->donations)) //If list is empty, quit
+    return;
+
+  struct list_elem *e;
+  int highest_priority_value = PRI_MIN; //This variable will be used to check maximum priority in donation list
+
+  /* Search all elements in sleep list */
+  for(e = list_begin(&cur->donations); e != list_end(&cur->donations); e = list_next(e))
+  {
+    struct thread *t = list_entry(e, struct thread, donation_elem); //Get each object in list.
+    
+    if(t->priority > highest_priority_value)
+      highest_priority_value = t->priority; //Update highest_priority_value with maximum value
+  }
+
+  if(highest_priority_value > cur->priority)
+    cur->priority = highest_priority_value; //If maximum priority in donation list is higher than current priority, update.
+}
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -475,9 +540,20 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  struct thread *cur = thread_current(); //Get current process info
+  int old_priority = cur->priority; //Temporary store last priority
+  cur->init_priority = new_priority; //Update with new priority
+  refresh_priority(); //Refresh
 
-  test_max_priority(); //Check if this process's priority is the highest.
+  //Compare old priority and current priority and if not same, do something.
+  if(old_priority < cur->priority)
+  {
+    donate_priority();
+  }
+  else if(old_priority > cur->priority)
+  {
+    test_max_priority();
+  }
 }
 
 /* Returns the current thread's priority. */
@@ -607,6 +683,11 @@ init_thread (struct thread *t, const char *name, int priority)
 
   /* Initialize child list */
   list_init(&t->child_list);
+
+  /* Initialize things related to priority donation */
+  list_init(&t->donations);
+  t->wait_on_lock = NULL;
+  t->init_priority = priority;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

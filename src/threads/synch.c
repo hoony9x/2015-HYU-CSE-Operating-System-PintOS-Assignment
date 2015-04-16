@@ -201,8 +201,16 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  if(lock->holder != NULL) //If another lock holder exists, run a donation task.
+  {
+    thread_current()->wait_on_lock = lock; //Update waiting info
+    list_push_back(&lock->holder->donations, &thread_current()->donation_elem); //Push current process info into holder's donation list
+    donate_priority(); //Donate!
+  }
+
   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
+  thread_current()->wait_on_lock = NULL; //Clear waiting info
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -237,6 +245,10 @@ lock_release (struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
 
   lock->holder = NULL;
+
+  remove_with_lock(lock); //Remove lock info from donation list.
+  refresh_priority(); //Refresh priority info (If any waiting process exists)
+
   sema_up (&lock->semaphore);
 }
 
