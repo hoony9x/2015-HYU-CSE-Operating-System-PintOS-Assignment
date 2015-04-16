@@ -124,6 +124,12 @@ struct thread
     /* Variable for storing wakeup time */
     int64_t my_awake_tick;
 
+    /* Variable for priority donation */
+    int init_priority;
+    struct lock *wait_on_lock;
+    struct list donations;
+    struct list_elem donation_elem;
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
@@ -173,5 +179,10 @@ int64_t get_next_tick_to_awake(void);
 /* Below functions are added to use priority scheduling */
 void test_max_priority(void);
 bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+
+/* Below functions are added to use priority donation */
+void donate_priority(void);
+void remove_with_lock(struct lock *lock);
+void refresh_priority(void);
 
 #endif /* threads/thread.h */
