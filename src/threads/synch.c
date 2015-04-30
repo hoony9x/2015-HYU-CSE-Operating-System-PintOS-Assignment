@@ -67,11 +67,11 @@ sema_down (struct semaphore *sema)
 
   old_level = intr_disable ();
   while (sema->value == 0) 
-    {
-      /* Added to sort list with priority */
-      list_insert_ordered(&sema->waiters, &thread_current()->elem, cmp_priority, NULL);
-      thread_block ();
-    }
+  {
+    /* Added to sort list with priority */
+    list_insert_ordered(&sema->waiters, &thread_current()->elem, cmp_priority, NULL);
+    thread_block ();
+  }
   sema->value--;
   intr_set_level (old_level);
 }
@@ -201,7 +201,9 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  if(lock->holder != NULL) //If another lock holder exists, run a donation task.
+  /* If another lock holder exists, run a donation task. */
+  /* If using mlfqs, do not use donation */
+  if(!thread_mlfqs && lock->holder != NULL)
   {
     thread_current()->wait_on_lock = lock; //Update waiting info
     list_push_back(&lock->holder->donations, &thread_current()->donation_elem); //Push current process info into holder's donation list
@@ -246,8 +248,12 @@ lock_release (struct lock *lock)
 
   lock->holder = NULL;
 
-  remove_with_lock(lock); //Remove lock info from donation list.
-  refresh_priority(); //Refresh priority info (If any waiting process exists)
+  /* If using mlfqs, do not use donation */
+  if(!thread_mlfqs)
+  {
+    remove_with_lock(lock); //Remove lock info from donation list.
+    refresh_priority(); //Refresh priority info (If any waiting process exists)
+  }
 
   sema_up (&lock->semaphore);
 }

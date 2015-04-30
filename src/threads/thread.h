@@ -130,6 +130,10 @@ struct thread
     struct list donations;
     struct list_elem donation_elem;
 
+    /* Variables for Advanced Scheduling */
+    int nice;
+    int recent_cpu;
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
@@ -169,6 +173,13 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+/* Below functions are added to use Advanced Scheduling */
+void mlfqs_priority(struct thread *t);
+void mlfqs_recent_cpu(struct thread *t);
+void mlfqs_load_avg(void);
+void mlfqs_increment(void);
+void mlfqs_recalc(void);
 
 /* Below functions are added to use alarm call */
 void thread_sleep(int64_t ticks);

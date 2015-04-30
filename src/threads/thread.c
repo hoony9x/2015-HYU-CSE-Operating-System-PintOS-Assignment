@@ -12,9 +12,19 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/fixed_point.h" /* Added to use floating point operation */
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+
+/* Added to use Advanced Scheduling */
+#define NICE_DEFAULT 0
+#define NICE_MAX 20
+#define NICE_MIN -20
+#define RECENT_CPU_DEFAULT 0
+#define LOAD_AVG_DEFAULT 0
+
+int load_avg;
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -247,6 +257,9 @@ thread_start (void)
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
   thread_create ("idle", PRI_MIN, idle, &idle_started);
+
+  /* Added to use Advanced Scheduling */
+  load_avg = LOAD_AVG_DEFAULT;
 
   /* Start preemptive thread scheduling. */
   intr_enable ();
@@ -540,19 +553,26 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  struct thread *cur = thread_current(); //Get current process info
-  int old_priority = cur->priority; //Temporary store last priority
-  cur->init_priority = new_priority; //Update with new priority
-  refresh_priority(); //Refresh
+  if(!thread_mlfqs) /* if thread use mlfqs, do not use donation. */
+  {
+    enum intr_level old_level = intr_disable();
 
-  //Compare old priority and current priority and if not same, do something.
-  if(old_priority < cur->priority)
-  {
-    donate_priority();
-  }
-  else if(old_priority > cur->priority)
-  {
-    test_max_priority();
+    struct thread *cur = thread_current(); //Get current process info
+    int old_priority = cur->priority; //Temporary store last priority
+    cur->init_priority = new_priority; //Update with new priority
+    refresh_priority(); //Refresh
+
+    //Compare old priority and current priority and if not same, do something.
+    if(old_priority < cur->priority)
+    {
+      donate_priority();
+    }
+    else if(old_priority > cur->priority)
+    {
+      test_max_priority();
+    }
+
+    intr_set_level(old_level);
   }
 }
 
@@ -565,35 +585,129 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+  enum intr_level old_level = intr_disable();
+
+  thread_current()->nice = nice; /* Set new nice value */
+  mlfqs_priority(thread_current()); /* Recalculate priority of current thread */
+  test_max_priority(); /* Scheduling */
+
+  intr_set_level (old_level);
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  enum intr_level old_level = intr_disable();
+  int nice_value = thread_current()->nice; /* Get current nice value */
+  intr_set_level (old_level);
+
+  return nice_value;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  enum intr_level old_level = intr_disable();
+  int cur_load_avg_val = fp_to_int_round(mult_mixed(load_avg, 100)); /* PintOS requires to multiply with 100 */
+  intr_set_level(old_level);
+
+  return cur_load_avg_val;
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  enum intr_level old_level = intr_disable ();
+  int cur_recent_cpu_val = fp_to_int_round(mult_mixed(thread_current()->recent_cpu, 100)); /* Pintos requires to multiply with 100 */
+  intr_set_level (old_level);
+  
+  return cur_recent_cpu_val;
 }
-
+
+void
+mlfqs_priority(struct thread *t)
+{
+  if(t != idle_thread)
+  {
+    /* Get each value and convert them into fixed point value */
+    int max_priority = int_to_fp(PRI_MAX);
+    int recent_cpu_divided = div_mixed(t->recent_cpu, 4);
+    int niceval_doubled = 2 * t->nice;
+
+    /* Calculate priority value */
+    int temp = sub_fp(max_priority, recent_cpu_divided);
+    temp = sub_mixed(temp, niceval_doubled);
+
+    /* Store new priority value */
+    t->priority = fp_to_int(temp);
+
+    /* Check if priority value is in range */
+    if(t->priority < PRI_MIN) t->priority = PRI_MIN;
+    if(t->priority > PRI_MAX) t->priority = PRI_MAX;
+  }
+}
+
+void
+mlfqs_recent_cpu(struct thread *t)
+{
+  if(t != idle_thread)
+  {
+    /* Get load average value and convert to fixed point value */
+    int load_avg_doubled = mult_mixed(load_avg, 2);
+
+    /* Calculate and store value into recent cpu variable */
+    int temp = div_fp(load_avg_doubled, add_mixed(load_avg_doubled, 1));
+    temp = mult_fp(temp, t->recent_cpu);
+    t->recent_cpu = add_mixed(temp, t->nice);
+  }
+}
+
+void
+mlfqs_load_avg(void)
+{
+  /* Get current amount of threads */
+  int ready_list_size = list_size(&ready_list);
+  if(thread_current() != idle_thread) /* If not idle thread, increment 1 */
+    ready_list_size++;
+
+  /* Get load average and divide */
+  int divided_load_avg = mult_fp(load_avg, div_mixed(int_to_fp(59), 60));
+
+  /* Divide ready_list_size by 60 */
+  ready_list_size = div_mixed(int_to_fp(ready_list_size), 60);
+
+  /* Get new load average */
+  load_avg = add_fp(divided_load_avg, ready_list_size);
+
+  /* Check if load_avg is non-negative value */
+  ASSERT(load_avg >= 0);
+}
+
+void
+mlfqs_increment(void)
+{
+  /* If not idle thread, increse recent cpu value */
+  if(thread_current() != idle_thread)
+    thread_current()->recent_cpu = add_mixed(thread_current()->recent_cpu, 1);
+}
+
+void
+mlfqs_recalc(void)
+{
+  struct list_elem *e;
+  for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e))
+  {
+    struct thread *t = list_entry(e, struct thread, allelem);
+    mlfqs_recent_cpu(t);
+    mlfqs_priority(t);
+  }
+}
+
 /* Idle thread.  Executes when no other thread is ready to run.
 
    The idle thread is initially put on the ready list by
@@ -688,6 +802,10 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init(&t->donations);
   t->wait_on_lock = NULL;
   t->init_priority = priority;
+
+  /* Initialize variables for Advanced Scheduling */
+  t->nice = NICE_DEFAULT;
+  t->recent_cpu = RECENT_CPU_DEFAULT;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
