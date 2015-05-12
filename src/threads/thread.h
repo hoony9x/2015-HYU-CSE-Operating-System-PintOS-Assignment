@@ -97,7 +97,6 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-#endif
 
     /* Codes for file descriptor */
     struct file **file_desc_table;
@@ -120,19 +119,7 @@ struct thread
 
     /* return value from exit */
     int exit_status;
-
-    /* Variable for storing wakeup time */
-    int64_t my_awake_tick;
-
-    /* Variable for priority donation */
-    int init_priority;
-    struct lock *wait_on_lock;
-    struct list donations;
-    struct list_elem donation_elem;
-
-    /* Variables for Advanced Scheduling */
-    int nice;
-    int recent_cpu;
+#endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
@@ -173,27 +160,5 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
-
-/* Below functions are added to use Advanced Scheduling */
-void mlfqs_priority(struct thread *t);
-void mlfqs_recent_cpu(struct thread *t);
-void mlfqs_load_avg(void);
-void mlfqs_increment(void);
-void mlfqs_recalc(void);
-
-/* Below functions are added to use alarm call */
-void thread_sleep(int64_t ticks);
-void thread_awake(int64_t ticks);
-void update_next_tick_to_awake(void);
-int64_t get_next_tick_to_awake(void);
-
-/* Below functions are added to use priority scheduling */
-void test_max_priority(void);
-bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
-
-/* Below functions are added to use priority donation */
-void donate_priority(void);
-void remove_with_lock(struct lock *lock);
-void refresh_priority(void);
 
 #endif /* threads/thread.h */
