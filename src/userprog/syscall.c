@@ -9,6 +9,8 @@
 #include <devices/input.h> /* Added to use input_getc() function */
 #include "userprog/process.h" /* Added to use process_execute() */
 #include "threads/synch.h" /* Added to use lock */
+#include "vm/page.h" /* Added to use VM */
+#include "threads/vaddr.h" /* Added to use VM */
 
 static void syscall_handler (struct intr_frame *);
 
@@ -20,9 +22,7 @@ struct file
 	bool deny_write;            /* Has file_deny_write() been called? */
 };
 
-struct lock filesys_lock; /* Added to use filesystem lock to prevent unexpected situation. */
-
-void check_address(void *addr);
+struct vm_entry* check_address(void *addr, void *esp UNUSED);
 void get_argument(unsigned int *esp, unsigned int *arg[5], int count);
 
 void sys_halt(void);
@@ -50,13 +50,13 @@ static void
 syscall_handler (struct intr_frame *f) 
 {
   	unsigned int *esp = (unsigned int*)(f->esp); //Stack pointer from interrupt frame
-	check_address(esp);
+	check_address(esp, esp);
 
 	unsigned int *argument[5]; //Arguments for system call will be stored temporary.
 	int system_call_number = *(int*)esp; //Recognize system call number. This will be used for switch case block.
 
 	esp = esp + 1; //Increase stack pointer value.
-	check_address(esp); /* Check again */
+	check_address(esp, esp); /* Check again */
 
 	switch(system_call_number)
 	{
@@ -82,7 +82,11 @@ syscall_handler (struct intr_frame *f)
 				/* Argument type casting section. */
 				char *exec_filename = (char*)*(argument[0]); //Type casting.
 
+				/* Check validity */
+				check_valid_string(exec_filename, esp);
+
 				f->eax = sys_exec(exec_filename); //Store return value to eax.
+				unpin_string(exec_filename);
 			}
 			break;
 			
@@ -105,7 +109,11 @@ syscall_handler (struct intr_frame *f)
 				char *create_filename = (char*)*(argument[0]);
 				unsigned int initial_size = (int)*(argument[1]);
 
+				/* Check validity */
+				check_valid_string(create_filename, esp);
+
 				f->eax = sys_create(create_filename, initial_size); //Store return value to eax.
+				unpin_string(create_filename);
 			}
 			break;
 			
@@ -116,7 +124,11 @@ syscall_handler (struct intr_frame *f)
 				/* Argument type casting section. */
 				char *remove_filename = (char*)*(argument[0]); //Type casting.
 
+				/* Check validity */
+				check_valid_string(remove_filename, esp);
+
 				f->eax = sys_remove(remove_filename); //Store return value to eax.
+				unpin_string(remove_filename);
 			}
 			break;
 
@@ -127,7 +139,11 @@ syscall_handler (struct intr_frame *f)
 				/* Argument type casting section. */
 				char *open_filename = (char*)*(argument[0]);
 
+				/* Check validity */
+				check_valid_string(open_filename, esp);
+
 				f->eax = sys_open(open_filename); //Store return value to eax.
+				unpin_string(open_filename);
 			}
 			break;
 			
@@ -151,7 +167,11 @@ syscall_handler (struct intr_frame *f)
 				char *buffer = (char*)*(argument[1]);
 				unsigned int size = (unsigned int)*(argument[2]);
 
+				/* Check validity */
+				check_valid_buffer(buffer, size, esp, false);
+
 				f->eax = sys_read(fd, buffer, size); //Store return value to eax.
+				unpin_buffer(buffer, size);
 			}
 			break;
 
@@ -164,7 +184,11 @@ syscall_handler (struct intr_frame *f)
 				char *buffer = (char*)*(argument[1]);
 				unsigned int size = (unsigned int)*(argument[2]);
 
+				/* Check validity */
+				check_valid_buffer(buffer, size, esp, true);
+
 				f->eax = sys_write(fd, buffer, size); //Store return value to eax.
+				unpin_buffer(buffer, size);
 			}
 			break;
 
@@ -206,14 +230,67 @@ syscall_handler (struct intr_frame *f)
 			NOT_REACHED (); //If handler is correctly implemented, this line should not be executed.
 			break;
 	}
+
+	unpin_ptr(esp);
 }
 
 /* Check address if it is valid address */
-void
-check_address(void *addr)
+struct vm_entry*
+check_address(void *addr, void *esp UNUSED)
 {
 	/* Check address and if address value is out of range, exit process. */
-	if((unsigned int)addr <= 0x8048000 || (unsigned int)addr >= 0xc0000000) sys_exit(-1);
+	if((unsigned int)addr <= (unsigned int)USER_ADDR_LOW_BOUNDARY || (unsigned int)addr >= (unsigned int)USER_ADDR_MAX_BOUNDARY)
+		sys_exit(-1);
+
+	struct vm_entry *entry = find_vme(addr);
+	if(entry)
+	{
+		entry->pinned = true;
+		handle_mm_fault(entry);
+	}
+	else if((size_t)addr < (size_t)(PHYS_BASE - MAX_STACK_SIZE))
+		sys_exit(-1);
+
+	if(entry->is_loaded == false)
+		sys_exit(-1);
+
+	return entry;
+}
+
+void
+check_valid_buffer(void *buffer, unsigned int size, void *esp, bool to_write)
+{
+	unsigned int i;
+	struct vm_entry *entry;
+
+	for(i = 0; i < size; i++)
+	{
+		entry = check_address(buffer, esp);
+		if(entry != NULL && (to_write == true && entry->writable == false))
+		{
+			sys_exit(-1);
+		}
+		buffer = buffer + 1;
+	}
+}
+
+void
+check_valid_string(const void *str, void *esp)
+{
+	void *ptr = (void*)str;
+	struct vm_entry *entry UNUSED;
+
+	entry = check_address(ptr, esp);
+
+	while(*(char*)ptr != '\0')
+	{
+		struct vm_entry *entry UNUSED;
+		entry = check_address(ptr, esp);
+
+		ptr = ptr + 1;
+	}
+
+	entry = check_address(ptr, esp);
 }
 
 /* Get argument from esp and store them into kernel stack */
@@ -224,7 +301,7 @@ get_argument(unsigned int *esp, unsigned int *arg[5], int count)
 	for(i = 0; i < count; i++)
 	{
 		/* Before store arguments from esp to kernel stack, check every esp pointer value. */
-		check_address((void*)esp);
+		check_address((void*)esp, (void*)esp);
 		arg[i] = esp; /* Insert each esp address into kernel stack */
 		esp++;
 	}
@@ -252,9 +329,6 @@ sys_exit(int status)
 bool
 sys_create(const char *file, unsigned int initial_size)
 {
-	/* If argument is pointer value, check this if it is out of range. */
-	check_address((void*)file);
-
 	lock_acquire(&filesys_lock); //lock for atomic file operation.
 	bool result = filesys_create(file, initial_size);
 	lock_release(&filesys_lock); //Unlock for atomic file operation.
@@ -266,9 +340,6 @@ sys_create(const char *file, unsigned int initial_size)
 bool
 sys_remove(const char *file)
 {
-	/* If argument is pointer value, check this if it is out of range. */
-	check_address((void*)file);
-
 	lock_acquire(&filesys_lock); //lock for atomic file operation.
 	bool result = filesys_remove(file);
 	lock_release(&filesys_lock); //Unlock for atomic file operation.
@@ -313,9 +384,6 @@ sys_wait(tid_t tid)
 int
 sys_open(const char *open_filename)
 {
-	/* If argument is pointer value, check this if it is out of range. */
-	check_address((void*)open_filename);
-
 	lock_acquire(&filesys_lock); //lock for atomic file operation.
 	struct file *open_file = filesys_open(open_filename); //Get file object
 	if(!open_file)
@@ -352,8 +420,6 @@ sys_filesize(int fd)
 int
 sys_read(int fd, char *buffer, unsigned int size)
 {
-	/* If argument is pointer value, check this if it is out of range. */
-	check_address((void*)buffer);
 	lock_acquire(&filesys_lock); //lock for atomic file operation.
 
 	if(fd == 0) //STDIN
@@ -386,9 +452,6 @@ sys_read(int fd, char *buffer, unsigned int size)
 int
 sys_write(int fd, char *buffer, unsigned int size)
 {
-	/* If argument is pointer value, check this if it is out of range. */
-	check_address((void*)buffer);
-
 	lock_acquire(&filesys_lock); //lock for atomic file operation.
 	
 	if(fd == 1) //STDOUT

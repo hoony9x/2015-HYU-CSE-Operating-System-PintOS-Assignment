@@ -208,7 +208,7 @@ thread_create (const char *name, int priority, thread_func *function, void *aux)
 
 
   /* Implement file descriptor table */
-  t->file_desc_table = palloc_get_page(0);
+  t->file_desc_table = palloc_get_page(PAL_ZERO);
   t->file_desc_count = 2;
 
   /* Implement process hierarchy */

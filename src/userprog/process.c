@@ -1,4 +1,5 @@
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -18,6 +19,7 @@
 #include "threads/malloc.h" /* Added to use malloc */
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "vm/page.h" /* Added to use VM */
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -73,6 +75,9 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
+  /* Initialize VM */
+  vm_init(&thread_current()->vm);
+
   /*
     Temporary variable that store tokenized arguments from 'file_name' variable.
     This variable will be used in 'argument_stack' function to store argument into stack.
@@ -106,6 +111,7 @@ start_process (void *file_name_)
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
+
   if (!success)
   {
     sema_up(&thread_current()->load_sema); /* Unblock parent process */
@@ -115,7 +121,7 @@ start_process (void *file_name_)
   {
     thread_current()->is_load = 1; /* flag that successfully load. */
     sema_up(&thread_current()->load_sema); /* Unblock parent process */
-  }  
+  }
 
   /* Store arguments into stack */
   argument_stack(parse , arg_count , &if_.esp);
@@ -231,15 +237,21 @@ process_add_file(struct file *f)
 struct file
 *process_get_file(int fd)
 {
-  return thread_current()->file_desc_table[fd]; //Returns matched file object.
+  if(fd > thread_current()->file_desc_count)
+    return NULL;
+  else
+    return thread_current()->file_desc_table[fd]; //Returns matched file object.
 }
 
 /* This function closes related file and initialize correpond fd table. */
 void
 process_close_file(int fd)
 {
-  file_close(thread_current()->file_desc_table[fd]); //Close target file.
-  thread_current()->file_desc_table[fd] = NULL; //Set target table to NULL.
+  if(fd <= thread_current()->file_desc_count)
+  {
+    file_close(thread_current()->file_desc_table[fd]); //Close target file.
+    thread_current()->file_desc_table[fd] = NULL; //Set target table to NULL.
+  }
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -277,6 +289,16 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
+  /* close all files and clear allocated memory for file descriptor table */
+  int i;
+  for(i = 2; i < cur->file_desc_count; i++) //Remove all files that opened from that process.
+  {
+    process_close_file(i);
+  }
+  palloc_free_page(cur->file_desc_table); //Clear memory for file descriptor table.
+
+  vm_destroy(&cur->vm); //Clear allocated memory for VM
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -293,14 +315,6 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-
-  /* close all files and clear allocated memory for file descriptor table */
-  int i;
-  for(i = 2; i < cur->file_desc_count; i++) //Remove all files that opened from that process.
-  {
-    process_close_file(i);
-  }
-  palloc_free_page(cur->file_desc_table); //Clear memory for file descriptor table.
 }
 
 /* Sets up the CPU for running user code in the current
@@ -318,7 +332,7 @@ process_activate (void)
      interrupts. */
   tss_update ();
 }
-
+
 /* We load ELF binaries.  The following definitions are taken
    from the ELF specification, [ELF1], more-or-less verbatim.  */
 
@@ -407,6 +421,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
+
+  lock_acquire(&filesys_lock);
 
   /* Open executable file. */
   file = filesys_open (file_name);
@@ -499,10 +515,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  //file_close (file);
+  lock_release(&filesys_lock);
   return success;
 }
-
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
@@ -576,38 +593,34 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
   file_seek (file, ofs);
   while (read_bytes > 0 || zero_bytes > 0) 
-    {
-      /* Calculate how to fill this page.
-         We will read PAGE_READ_BYTES bytes from FILE
-         and zero the final PAGE_ZERO_BYTES bytes. */
-      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
-      size_t page_zero_bytes = PGSIZE - page_read_bytes;
+  {
+    /* Calculate how to fill this page.
+       We will read PAGE_READ_BYTES bytes from FILE
+       and zero the final PAGE_ZERO_BYTES bytes. */
+    size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+    size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
-        return false;
+    struct vm_entry *entry = (struct vm_entry*)malloc(sizeof(struct vm_entry));
 
-      /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
+    entry->type = VM_BIN;
+    entry->writable = writable;
+    entry->is_loaded = false;
+    entry->file = file;
+    entry->offset = ofs;
+    entry->vaddr = upage;
+    entry->read_bytes = page_read_bytes;
+    entry->zero_bytes = page_zero_bytes;
+    entry->pinned = false;
 
-      /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
+    if(insert_vme(&thread_current()->vm, entry) == false)
+      return false;
 
-      /* Advance. */
-      read_bytes -= page_read_bytes;
-      zero_bytes -= page_zero_bytes;
-      upage += PGSIZE;
-    }
+    /* Advance. */
+    read_bytes -= page_read_bytes;
+    zero_bytes -= page_zero_bytes;
+    ofs += page_read_bytes;
+    upage += PGSIZE;
+  }
   return true;
 }
 
@@ -621,13 +634,27 @@ setup_stack (void **esp)
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
-    {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        palloc_free_page (kpage);
-    }
+  {
+    success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+    if (success)
+      *esp = PHYS_BASE;
+    else
+      palloc_free_page (kpage);
+  }
+
+  struct vm_entry *entry = (struct vm_entry*)malloc(sizeof(struct vm_entry));
+  if(entry == NULL)
+    return false;
+
+  entry->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
+  entry->writable = true;
+  entry->type = VM_ANON;
+  entry->is_loaded = true;
+  entry->pinned = false;
+
+  if(insert_vme(&thread_current()->vm, entry) == false)
+    return false;
+
   return success;
 }
 
@@ -649,4 +676,35 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+bool handle_mm_fault(struct vm_entry *vme)
+{
+  if(vme->is_loaded == true)
+    return false;
+
+  void *kaddr = palloc_get_page(PAL_USER);
+  switch(vme->type)
+  {
+    case VM_BIN:
+      if(!load_file(kaddr, vme))
+      {
+        palloc_free_page(kaddr);
+        return false;
+      }
+      break;
+
+    case VM_FILE:
+      // Not implemented yet
+      break;
+
+    case VM_ANON:
+      // Not implemented yet
+      break;
+  }
+
+  install_page(vme->vaddr, kaddr, vme->writable);
+  vme->is_loaded = true;
+
+  return true;
 }

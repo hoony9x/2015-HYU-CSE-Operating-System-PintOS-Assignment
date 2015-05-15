@@ -5,6 +5,11 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+/* Added to use VM */
+#include "threads/vaddr.h"
+#include "vm/page.h"
+#include "userprog/syscall.h"
+
 /* Number of page faults processed. */
 static long long page_fault_cnt;
 
@@ -128,8 +133,6 @@ page_fault (struct intr_frame *f)
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
 
-  sys_exit(-1); //If page_fault, call this. Below code would not be executed.
-
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
      data.  It is not necessarily the address of the instruction
@@ -151,14 +154,40 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
+  bool load = false;
+  
+  if(user)  
+  {     
+     if(((size_t)fault_addr < (size_t)USER_ADDR_LOW_BOUNDARY) || is_kernel_vaddr(fault_addr) || (size_t)f->esp > (size_t)PHYS_BASE || (size_t)f->esp < (size_t)(PHYS_BASE- MAX_STACK_SIZE))
+          sys_exit(-1);
+
+     if (not_present)     
+     {        
+        struct vm_entry *entry = find_vme(fault_addr);
+        if(entry)
+        { 
+           if(write && (entry->writable == 0))
+             sys_exit(-1);
+
+           entry->pinned = true;
+           load = handle_mm_fault(entry);
+           entry->pinned = false;
+         }
+     }
+     else
+       sys_exit(-1);
+  }  
+
+  if(load == false)
+  {
+    /*
+    printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  kill (f);
+    kill (f);
+    */
+    sys_exit(-1);
+  }
 }
-
