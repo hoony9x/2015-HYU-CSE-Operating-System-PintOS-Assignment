@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include <threads/synch.h> /* Added to use semaphore */
+#include <hash.h> /* Added to use Hash for VM */
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -94,7 +95,6 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
-#ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
 
@@ -119,7 +119,13 @@ struct thread
 
     /* return value from exit */
     int exit_status;
-#endif
+
+    /* Added to use VM */
+    struct hash vm;
+
+    /* Added to use mmap */
+    int mapid;
+    struct list mmap_list;
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */

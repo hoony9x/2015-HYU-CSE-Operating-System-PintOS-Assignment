@@ -208,7 +208,7 @@ thread_create (const char *name, int priority, thread_func *function, void *aux)
 
 
   /* Implement file descriptor table */
-  t->file_desc_table = palloc_get_page(0);
+  t->file_desc_table = palloc_get_page(PAL_ZERO);
   t->file_desc_count = 2;
 
   /* Implement process hierarchy */
@@ -225,7 +225,6 @@ thread_create (const char *name, int priority, thread_func *function, void *aux)
 
   /* Push child into child list. */
   list_push_back(&t->parent_thread->child_list, &t->child_elem);
-
 
   /* Add to run queue. */
   thread_unblock (t);
