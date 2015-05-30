@@ -38,6 +38,10 @@
 #include "filesys/fsutil.h"
 #endif
 
+/* Added to use Swapping */ 
+#include "vm/swap.h"
+#include "vm/frame.h"
+
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -126,6 +130,10 @@ main (void)
   locate_block_devices ();
   filesys_init (format_filesys);
 #endif
+
+  /* Added to use Swapping */
+  lru_list_init();
+  swap_init();
 
   printf ("Boot complete.\n");
   

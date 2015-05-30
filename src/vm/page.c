@@ -9,7 +9,6 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
-
 #include "vm/page.h"
 
 static unsigned int vm_hash_func(const struct hash_elem *e, void *aux UNUSED);
@@ -113,11 +112,9 @@ bool unpin_ptr(void *vaddr)
 /* Set all pin value false in VM entry related to string's each address. */
 void unpin_string(void *str)
 {
-	while(*(char*)str != '\0')
-	{
-		unpin_ptr(str);
-		str = str + 1;
-	}
+	unsigned int i;
+	for(i = 0; i < strlen((char*)str); i++)
+		unpin_ptr(str + i);
 }
 
 /* Set all pin value false in VM entry related to buffer and size */
@@ -126,8 +123,7 @@ void unpin_buffer(void *buffer, unsigned int size)
 	unsigned int i;
 	for(i = 0; i < size; i++)
 	{
-		unpin_ptr(buffer);
-		buffer = buffer + 1;
+		unpin_ptr(buffer + i);
 	}
 }
 

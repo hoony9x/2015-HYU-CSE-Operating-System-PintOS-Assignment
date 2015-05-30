@@ -46,6 +46,14 @@ struct mmap_file
 	struct list vme_list;
 };
 
+struct page
+{
+	void *kaddr;
+	struct vm_entry *vme;
+	struct thread *thread;
+	struct list_elem lru;
+};
+
 struct vm_entry* find_vme(void *vaddr);
 bool insert_vme(struct hash *vm, struct vm_entry *vme);
 bool delete_vme(struct hash *vm, struct vm_entry *vme);

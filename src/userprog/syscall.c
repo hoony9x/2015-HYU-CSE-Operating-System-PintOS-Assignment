@@ -9,11 +9,16 @@
 #include <devices/input.h> /* Added to use input_getc() function */
 #include "userprog/process.h" /* Added to use process_execute() */
 #include "threads/synch.h" /* Added to use lock */
-#include "vm/page.h" /* Added to use VM */
 #include "threads/vaddr.h" /* Added to use VM */
 #include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "userprog/pagedir.h"
+#include <string.h>
+
+/* Added to use VM */
+#include "vm/page.h"
+#include "vm/swap.h"
+#include "vm/frame.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -276,6 +281,9 @@ check_address(void *addr, void *esp UNUSED)
 	if((unsigned int)addr <= (unsigned int)USER_ADDR_LOW_BOUNDARY || (unsigned int)addr >= (unsigned int)USER_ADDR_MAX_BOUNDARY)
 		sys_exit(-1);
 
+	/* Check if loaded */
+	bool load = false;
+
 	/* Get VM entry */
 	struct vm_entry *entry = find_vme(addr);
 	if(entry)
@@ -285,10 +293,32 @@ check_address(void *addr, void *esp UNUSED)
 
 		/* handle_mm_fault() if entry is not loaded. */
 		handle_mm_fault(entry);
+
+		/* Set load value */
+		load = entry->is_loaded;
+	}
+	else if(addr >= esp - STACK_HEURISTIC) /* Expand Stack space */
+	{
+		/* Get success state */
+		load = expand_stack((void*)addr);
+
+		/* If load success, one more try to get entry. */
+		entry = find_vme(addr);
+		if(entry)
+		{
+			/* Set entry's pin value to true. */
+			entry->pinned = true;
+
+			/* handle_mm_fault() if entry is not loaded. */
+			handle_mm_fault(entry);
+
+			/* Set load value */
+			load = entry->is_loaded;
+		}
 	}
 
 	/* If failed to load, exit(-1) */
-	if(entry != NULL && entry->is_loaded == false)
+	if(entry != NULL && load == false)
 		sys_exit(-1);
 
 	return entry;
@@ -304,7 +334,7 @@ check_valid_buffer(void *buffer, unsigned int size, void *esp, bool to_write)
 
 	for(i = 0; i < size; i++)
 	{
-		entry = check_address(ptr, esp);
+		entry = check_address(ptr + i, esp);
 		if(entry == NULL)
 			sys_exit(-1);
 
@@ -312,8 +342,6 @@ check_valid_buffer(void *buffer, unsigned int size, void *esp, bool to_write)
 		{
 			sys_exit(-1);
 		}
-
-		ptr = ptr + 1;
 	}
 }
 
@@ -328,17 +356,15 @@ check_valid_string(const void *str, void *esp)
 	if(entry == NULL)
 		sys_exit(-1);
 
-	while(*(char*)ptr != '\0')
+	unsigned int i;
+	for(i = 0; i < strlen((char*)ptr); i++)
 	{
-		entry = check_address(ptr, esp);
-
+		entry = check_address(ptr + i, esp);
 		if(entry == NULL)
 			sys_exit(-1);
-
-		ptr = ptr + 1;
 	}
 
-	entry = check_address(ptr, esp);
+	entry = check_address(ptr + i, esp);
 	if(entry == NULL)
 		sys_exit(-1);
 }
@@ -504,7 +530,7 @@ do_munmap(struct mmap_file *mmap_f)
 			}
 
 			/* Clear page allocated for VM entry */
-			palloc_free_page(pagedir_get_page(thread_current()->pagedir, entry->vaddr));			
+			free_page(pagedir_get_page(thread_current()->pagedir, entry->vaddr));			
 			pagedir_clear_page(thread_current()->pagedir, entry->vaddr);
 		}
 

@@ -19,7 +19,11 @@
 #include "threads/malloc.h" /* Added to use malloc */
 #include "threads/thread.h"
 #include "threads/vaddr.h"
-#include "vm/page.h" /* Added to use VM */
+
+/* Added to use VM */
+#include "vm/page.h"
+#include "vm/swap.h"
+#include "vm/frame.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -88,7 +92,6 @@ start_process (void *file_name_)
     This variable will be used in 'argument_stack' function to store argument into stack.
   */
   char **parse = (char**)malloc(sizeof(char*)); //parsed tokens will be stored here temporary.
-  //char **parse = palloc_get_page(0); //parsed tokens will be stored here temporary.
   int arg_count = 0; //The number of parsed arguments.
   char *temp_parsed; //The variable that store one parsed argument temporary.
   char *strtok_save_ptr; //3rd argument of strtok_r function.
@@ -641,24 +644,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp) 
 {
-  uint8_t *kpage;
+  //uint8_t *kpage;
   bool success = false;
-
-  /* Initial Code */
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
-  {
-    success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-    if (success)
-      *esp = PHYS_BASE;
-    else
-      palloc_free_page (kpage);
-  }
 
   /* Create new VM entry */
   struct vm_entry *entry = (struct vm_entry*)malloc(sizeof(struct vm_entry));
   if(entry == NULL)
-    return false;
+    return success;
 
   /* Initialize VM */
   entry->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
@@ -667,9 +659,26 @@ setup_stack (void **esp)
   entry->is_loaded = true;
   entry->pinned = false;
 
+  /* Create new page */
+  struct page *page = alloc_page(PAL_USER | PAL_ZERO);
+  page->vme = entry; /* Set vme into page */
+  void *kaddr = page->kaddr; /* Set kaddr */
+
   /* Insert VM entry into VM hash table. */
   if(insert_vme(&thread_current()->vm, entry) == false)
     return false;
+
+  /* Perform install page and get result */
+  success = install_page(((uint8_t *) PHYS_BASE) - PGSIZE, kaddr, true);
+  if(success)
+  {
+    *esp = PHYS_BASE;
+  }
+  else
+  {
+    free_page(page);
+    return success;
+  }
 
   return success;
 }
@@ -702,7 +711,9 @@ bool handle_mm_fault(struct vm_entry *vme)
     return false;
 
   /* Allocate memory for 1 page */
-  void *kaddr = palloc_get_page(PAL_USER);
+  struct page *page = alloc_page(PAL_USER);
+  page->vme = vme;
+  void *kaddr = page->kaddr;
 
   /* If failed to load page, free page */
   switch(vme->type)
@@ -710,7 +721,7 @@ bool handle_mm_fault(struct vm_entry *vme)
     case VM_BIN:
       if(!load_file(kaddr, vme))
       {
-        palloc_free_page(kaddr);
+        free_page(kaddr);
         return false;
       }
       break;
@@ -718,19 +729,78 @@ bool handle_mm_fault(struct vm_entry *vme)
     case VM_FILE:
       if(!load_file(kaddr, vme))
       {
-        palloc_free_page(kaddr);
+        free_page(kaddr);
         return false;
       }
       break;
 
     case VM_ANON:
-      // Not implemented yet
+      swap_in(vme->swap_slot, kaddr);
       break;
   }
 
   /* If success to load page, map to physical and VM. */
   install_page(vme->vaddr, kaddr, vme->writable);
   vme->is_loaded = true;
+
+  return true;
+}
+
+bool expand_stack(void *addr)
+{
+  /* Grow limit already checked. */
+  /*
+    Round down to nearest page boundary.
+    static inline void *pg_round_down (const void *va) {
+      return (void *) ((uintptr_t) va & ~PGMASK);
+    }
+  */
+
+  /* Check if the size of stack is smaller than MAX size */
+  if((size_t)(PHYS_BASE - pg_round_down(addr)) > MAX_STACK_SIZE)
+    return false;
+
+  /* Create new VM entry for expanded stack space. */
+  struct vm_entry *entry = (struct vm_entry*)malloc(sizeof(struct vm_entry));
+  if(entry == NULL) /* Failed to allocate */
+    return false;
+
+  /* Initialize VM entry contents */
+  entry->vaddr = pg_round_down(addr);
+  entry->writable = true;
+  entry->type = VM_ANON;
+  entry->pinned = true;
+
+  /* Create new page */
+  struct page* page = alloc_page(PAL_USER | PAL_ZERO);
+  if(page == NULL) /* If failed to create new page, rollback. */
+  {
+    free(entry);
+    return false;
+  }
+
+  /* Set VM entry into page */
+  page->vme = entry;
+
+  /* If failed to insert VM entry into VM hash table, rollback. */
+  if(!insert_vme(&thread_current()->vm, entry))
+  {
+    free(entry);
+    free_page(page->kaddr);
+    return false;
+  }
+
+  /* If failed to link vaddr with kaddr, rollback. */
+  if(!install_page(entry->vaddr, page->kaddr, entry->writable))
+  {
+    free(entry);
+    free_page(page->kaddr);
+    return false;
+  }
+
+  /* Set final value */
+  entry->is_loaded = true;
+  entry->pinned = false;
 
   return true;
 }

@@ -12,4 +12,6 @@ int process_add_file(struct file *f);
 struct file *process_get_file(int fd);
 void process_close_file(int fd);
 
+bool expand_stack(void *addr);
+
 #endif /* userprog/process.h */

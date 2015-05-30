@@ -8,7 +8,10 @@
 /* Added to use VM */
 #include "threads/vaddr.h"
 #include "vm/page.h"
+#include "vm/swap.h"
+#include "vm/frame.h"
 #include "userprog/syscall.h"
+#include "userprog/process.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -159,14 +162,6 @@ page_fault (struct intr_frame *f)
   
   if(user) /* If accessed by user */
   {  
-    /* Check address range for validation */
-    if(((size_t)fault_addr < (size_t)USER_ADDR_LOW_BOUNDARY) ||
-      (size_t)fault_addr >= (size_t)USER_ADDR_MAX_BOUNDARY ||
-      is_kernel_vaddr(fault_addr) ||
-      (size_t)f->esp > (size_t)PHYS_BASE ||
-      (size_t)f->esp < (size_t)(PHYS_BASE - MAX_STACK_SIZE))
-        sys_exit(-1);
-
     if (not_present) /* Check if physical page fault */
     {
       /* Search VM entry for fault_addr */
@@ -183,6 +178,11 @@ page_fault (struct intr_frame *f)
         entry->pinned = true;
         load = handle_mm_fault(entry);
         entry->pinned = false;
+      }
+      else if(fault_addr >= f->esp - STACK_HEURISTIC) /* Expand Stack space */
+      {
+        /* Get success state */
+        load = expand_stack(fault_addr);
       }
       else
         sys_exit(-1);
