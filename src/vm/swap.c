@@ -9,6 +9,10 @@
 #include "vm/page.h"
 #include "vm/swap.h"
 
+struct lock swap_lock;
+struct block *swap_block;
+struct bitmap *swap_map;
+
 void
 swap_init(void)
 {
@@ -54,7 +58,7 @@ swap_in(size_t used_index, void *kaddr)
 		/* But target Swap space indexed is free space. */
 		/* Shoud not reach here! */
 
-		NOT_REACHED();
+		PANIC("Trying to use free swap space!");
 	}
 	else
 	{
@@ -81,7 +85,7 @@ swap_out(void *kaddr)
 		/* So, available Swap space needed but nothing. */
 		/* Shoud not reach here! */
 
-		NOT_REACHED();
+		PANIC("Swap space is not initialized or not available!");
 	}
 
 	/* Set lock for concurrency */
@@ -97,7 +101,7 @@ swap_out(void *kaddr)
 		/* So, we need free space but in this case, no available space! */
 		/* Shoud not reach here! */
 
-		NOT_REACHED();
+		PANIC("No available space is in swap space!");
 	}
 	else
 	{
